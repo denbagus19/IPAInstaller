@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,10 +20,12 @@ jobs:
           brew install xcodegen ldid
 
       - name: Generate Xcode Project
+        working-directory: ./IPAInstaller
         run: |
           xcodegen generate
 
       - name: Build Xcode Project (Unsigned)
+        working-directory: ./IPAInstaller
         run: |
           xcodebuild clean build \
             -project IPAInstaller.xcodeproj \
@@ -36,21 +38,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       - name: Package into IPA
+        working-directory: ./IPAInstaller
         run: |
-          # Create Payload directory
           mkdir Payload
-          
-          # Copy the built .app to Payload
           cp -r build/Build/Products/Release-iphoneos/IPAInstaller.app Payload/
-          
-          # Perform fake signing using ldid (required for some sideloading methods to recognize it properly)
           ldid -S Payload/IPAInstaller.app
-          
-          # Zip it into an .ipa file
           zip -qr IPAInstaller.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: IPAInstaller-Unsigned
-          path: IPAInstaller.ipa
+          path: IPAInstaller/IPAInstaller.ipa
