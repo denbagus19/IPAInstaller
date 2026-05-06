@@ -33,20 +33,11 @@ jobs:
             -project IPAInstaller.xcodeproj \
             -scheme IPAInstaller \
             -configuration Release \
-            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build \
-            ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            clean build | xcpretty || xcodebuild \
-            -project IPAInstaller.xcodeproj \
-            -scheme IPAInstaller \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             clean build
 
       - name: Fake-sign with ldid
@@ -57,20 +48,16 @@ jobs:
           echo "Found App at: $APP_PATH"
           
           # Debug: List contents of the .app folder
-          echo "Contents of $APP_PATH:"
           ls -F "$APP_PATH"
           
-          # Find the actual executable (usually the one without extension and same name as folder)
           APP_NAME=$(basename "$APP_PATH" .app)
-          if [ -f "$APP_PATH/$APP_NAME" ]; then
-            EXECUTABLE_PATH="$APP_PATH/$APP_NAME"
-          else
-            # Fallback: find any executable file
-            EXECUTABLE_PATH=$(find "$APP_PATH" -maxdepth 1 -type f -not -name "*.*" | head -n 1)
+          if [ ! -f "$APP_PATH/$APP_NAME" ]; then
+            echo "ERROR: Executable '$APP_NAME' NOT found in bundle!"
+            echo "The build might have failed to produce the binary."
+            exit 1
           fi
           
-          echo "Signing executable: $EXECUTABLE_PATH"
-          ldid -S "$EXECUTABLE_PATH"
+          ldid -S "$APP_PATH/$APP_NAME"
           echo "APP_DIR=$APP_PATH" >> $GITHUB_ENV
 
       - name: Package into IPA
