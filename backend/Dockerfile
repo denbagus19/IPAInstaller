@@ -30,14 +30,14 @@ RUN wget -q \
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 WORKDIR /app
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # ── Copy app code ─────────────────────────────────────────────────────────────
-COPY . .
+COPY backend/ .
 
 # ── Startup script ────────────────────────────────────────────────────────────
-COPY start.sh /start.sh
+COPY backend/start.sh /start.sh
 RUN chmod +x /start.sh
 
 EXPOSE 8000
