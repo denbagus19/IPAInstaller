@@ -18,9 +18,13 @@ jobs:
       - name: Install xcodegen and ldid
         run: brew install xcodegen ldid
 
-      - name: Resolve Swift Packages
+      - name: Generate Project
         working-directory: ./IPAInstaller
         run: xcodegen generate
+
+      - name: Resolve Swift Packages
+        working-directory: ./IPAInstaller
+        run: xcodebuild -resolvePackageDependencies -project IPAInstaller.xcodeproj -scheme IPAInstaller
 
       - name: Build (No Code Signing)
         working-directory: ./IPAInstaller
@@ -32,7 +36,15 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build | xcpretty || xcodebuild \
+            -project IPAInstaller.xcodeproj \
+            -scheme IPAInstaller \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             clean build
