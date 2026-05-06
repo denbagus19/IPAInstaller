@@ -1,3 +1,4 @@
+# Project configuration for IPAInstaller
 name: IPAInstaller
 options:
   bundleIdPrefix: com.denbagus
