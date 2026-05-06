@@ -52,14 +52,18 @@ jobs:
       - name: Fake-sign with ldid
         working-directory: ./IPAInstaller
         run: |
-          APP_PATH="build/Build/Products/Release-iphoneos/IPAInstaller.app"
-          ldid -S "$APP_PATH/IPAInstaller"
+          APP_PATH=$(find build/Build/Products -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then echo "App not found"; exit 1; fi
+          echo "Found App at: $APP_PATH"
+          EXECUTABLE=$(basename "$APP_PATH" .app)
+          ldid -S "$APP_PATH/$EXECUTABLE"
+          echo "APP_DIR=$APP_PATH" >> $GITHUB_ENV
 
       - name: Package into IPA
         working-directory: ./IPAInstaller
         run: |
           mkdir -p Payload
-          cp -r build/Build/Products/Release-iphoneos/IPAInstaller.app Payload/
+          cp -r "${{ env.APP_DIR }}" Payload/
           zip -qr IPAInstaller.ipa Payload
           echo "IPA size: $(du -sh IPAInstaller.ipa | cut -f1)"
 
