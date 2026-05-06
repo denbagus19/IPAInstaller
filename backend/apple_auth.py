@@ -36,7 +36,12 @@ class AppleAuth:
     def _get_anisette_headers(self) -> Dict[str, str]:
         """Fetch anisette data from the local anisette-v3 server"""
         try:
-            resp = requests.get(f"{self.anisette_url}/get", timeout=10)
+            url = f"{self.anisette_url}/get"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 404:
+                url = f"{self.anisette_url}/"
+                resp = requests.get(url, timeout=10)
+            
             resp.raise_for_status()
             data = resp.json()
             return {
