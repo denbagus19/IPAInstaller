@@ -19,11 +19,9 @@ RUN git clone --depth=1 https://github.com/zhlynn/zsign.git /tmp/zsign \
 
 # ── Install anisette-v3 server ────────────────────────────────────────────────
 RUN wget -q \
-    https://github.com/Dadoum/anisette-v3-server/releases/latest/download/anisette-v3-server-x86_64-unknown-linux-gnu.zip \
-    -O /tmp/anisette.zip \
-    && unzip -q /tmp/anisette.zip -d /usr/local/bin/ \
-    && chmod +x /usr/local/bin/anisette-v3-server \
-    && rm /tmp/anisette.zip
+    https://github.com/Dadoum/Provision/releases/latest/download/anisette-server-x86_64 \
+    -O /usr/local/bin/anisette-v3-server \
+    && chmod +x /usr/local/bin/anisette-v3-server
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 WORKDIR /app
