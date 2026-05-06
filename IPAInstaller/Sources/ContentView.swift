@@ -17,7 +17,9 @@ struct ContentView: View {
     
     // State
     @State private var isSigning = false
+    @State private var isDetectingUDID = false
     @State private var statusMessage = "Pilih file IPA untuk mulai."
+    @State private var udidStatusMessage = ""
     @State private var showSettings = false
 
     var body: some View {
@@ -60,12 +62,60 @@ struct ContentView: View {
                         Image(systemName: "lock").foregroundColor(.secondary).frame(width: 22)
                         SecureField("Password", text: $password)
                     }
-                    HStack {
-                        Image(systemName: "iphone").foregroundColor(.secondary).frame(width: 22)
-                        TextField("Device UDID (40 karakter hex)", text: $deviceUDID)
-                            .autocapitalization(.none)
-                            .disableAutocorrection(true)
-                            .font(.system(.caption, design: .monospaced))
+                    
+                    // UDID — auto-detect atau isi manual
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: "iphone").foregroundColor(.secondary).frame(width: 22)
+                            TextField("UDID (opsional — akan dideteksi otomatis)", text: $deviceUDID)
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                                .font(.system(.caption, design: .monospaced))
+                            if !deviceUDID.isEmpty {
+                                Button(action: { deviceUDID = "" }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        
+                        Button(action: detectUDID) {
+                            HStack(spacing: 6) {
+                                if isDetectingUDID {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .scaleEffect(0.75)
+                                } else {
+                                    Image(systemName: deviceUDID.isEmpty ? "iphone.badge.play" : "arrow.clockwise")
+                                }
+                                Text(isDetectingUDID ? "Menunggu profil diinstall..." :
+                                     deviceUDID.isEmpty ? "Deteksi UDID Otomatis" : "Deteksi Ulang")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.blue.opacity(0.1))
+                            .foregroundColor(.blue)
+                            .cornerRadius(8)
+                        }
+                        .disabled(isDetectingUDID)
+                        
+                        if isDetectingUDID {
+                            Button("Batal") {
+                                UDIDDetector.shared.cancelPolling()
+                                isDetectingUDID = false
+                                udidStatusMessage = ""
+                            }
+                            .font(.caption)
+                            .foregroundColor(.red)
+                        }
+                        
+                        if !udidStatusMessage.isEmpty {
+                            Text(udidStatusMessage)
+                                .font(.caption)
+                                .foregroundColor(deviceUDID.isEmpty ? .orange : .green)
+                        }
                     }
                 }
                 
@@ -122,23 +172,17 @@ struct ContentView: View {
                     }
                 }
                 
-                // MARK: - UDID Help
-                Section(header: Label("Cara Menemukan UDID", systemImage: "questionmark.circle")) {
+                // MARK: - How It Works
+                Section(header: Label("Cara Kerja UDID Otomatis", systemImage: "questionmark.circle")) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("1. Di iPhone: Buka Safari → pergi ke udid.tech")
-                        Text("2. Ikuti instruksi untuk install profil sementara")
-                        Text("3. UDID Anda akan ditampilkan di halaman tersebut")
-                        Text("4. Salin dan tempel di kolom UDID di atas")
+                        Text("1. Ketuk \"Deteksi UDID Otomatis\"")
+                        Text("2. Safari akan membuka profil konfigurasi")
+                        Text("3. Ketuk Allow → Install di Settings → kembali ke app")
+                        Text("4. UDID terisi otomatis ✅")
+                        Text("5. Profil dapat dihapus setelah signing selesai")
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    
-                    Button("Buka udid.tech di Safari") {
-                        if let url = URL(string: "https://udid.tech") {
-                            UIApplication.shared.open(url)
-                        }
-                    }
-                    .foregroundColor(.blue)
                 }
             }
             .navigationTitle("IPA Installer")
@@ -167,7 +211,7 @@ struct ContentView: View {
     // MARK: - Helpers
     
     private var canSign: Bool {
-        selectedIPA != nil && !appleID.isEmpty && !password.isEmpty && !deviceUDID.isEmpty
+        selectedIPA != nil && !appleID.isEmpty && !password.isEmpty
     }
     
     @ViewBuilder
@@ -180,10 +224,39 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - UDID Auto-Detect Action
+    
+    private func detectUDID() {
+        isDetectingUDID = true
+        udidStatusMessage = "Menghubungi server..."
+        
+        UDIDDetector.shared.startDetection(
+            serverURL: serverURL,
+            onStatus: { msg in
+                udidStatusMessage = msg
+            },
+            onDetected: { udid in
+                deviceUDID = udid
+                isDetectingUDID = false
+                udidStatusMessage = "✅ UDID berhasil dideteksi!"
+                // Hapus pesan sukses setelah 3 detik
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    udidStatusMessage = ""
+                }
+            },
+            onError: { errMsg in
+                isDetectingUDID = false
+                udidStatusMessage = "⚠️ \(errMsg)"
+            }
+        )
+    }
+    
     // MARK: - Signing Action
     
     private func startSigning() {
         guard let ipa = selectedIPA else { return }
+        UDIDDetector.shared.cancelPolling()
+        isDetectingUDID = false
         
         isSigning = true
         statusMessage = "⏳ Menyiapkan..."

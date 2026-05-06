@@ -6,10 +6,11 @@ import tempfile
 from contextlib import asynccontextmanager
 from typing import Optional
 from pathlib import Path
+from datetime import datetime, timedelta
 
 import aiofiles
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi.responses import FileResponse, JSONResponse, Response, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from apple_auth import AppleAuth, AppleAuthError, TwoFactorRequired
@@ -25,6 +26,9 @@ os.makedirs(WORK_DIR, exist_ok=True)
 
 # In-memory job store (use Redis in production)
 jobs: dict = {}
+
+# In-memory UDID session store: {session_id: {"udid": str|None, "created_at": datetime}}
+udid_sessions: dict = {}
 
 # ── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -206,6 +210,142 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── UDID Auto-Detect (Configuration Profile technique) ────────────────────────
+
+@app.get("/udid/start")
+def udid_start():
+    """
+    Buat session baru untuk deteksi UDID.
+    App memanggil ini, lalu buka Safari ke /udid/profile/{session_id}
+    """
+    session_id = str(uuid.uuid4())
+    udid_sessions[session_id] = {
+        "udid": None,
+        "created_at": datetime.utcnow(),
+    }
+    profile_url = f"{BASE_URL}/udid/profile/{session_id}"
+    return {"session_id": session_id, "profile_url": profile_url}
+
+
+@app.get("/udid/profile/{session_id}")
+def udid_profile(session_id: str):
+    """
+    Serve .mobileconfig yang ketika di-install oleh iOS,
+    iOS akan POST UDID device ke /udid/capture/{session_id}
+    """
+    if session_id not in udid_sessions:
+        raise HTTPException(status_code=404, detail="Session tidak ditemukan")
+
+    capture_url = f"{BASE_URL}/udid/capture/{session_id}"
+    profile_uuid = str(uuid.uuid4()).upper()
+
+    mobileconfig = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>Profile Service</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.ipainstaller.udid.{session_id}</string>
+            <key>PayloadUUID</key>
+            <string>{profile_uuid}</string>
+            <key>PayloadDisplayName</key>
+            <string>IPA Installer - Deteksi UDID</string>
+            <key>PayloadDescription</key>
+            <string>Profil ini digunakan untuk mendeteksi UDID device Anda secara otomatis. Profil akan dihapus setelah UDID terdeteksi.</string>
+            <key>URL</key>
+            <string>{capture_url}</string>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>IPA Installer - Deteksi UDID</string>
+    <key>PayloadIdentifier</key>
+    <string>com.ipainstaller.udid</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>{str(uuid.uuid4()).upper()}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>"""
+
+    return Response(
+        content=mobileconfig,
+        media_type="application/x-apple-aspen-config",
+        headers={
+            "Content-Disposition": f'attachment; filename="udid-detect.mobileconfig"'
+        }
+    )
+
+
+@app.post("/udid/capture/{session_id}")
+async def udid_capture(session_id: str, request: Request):
+    """
+    iOS mengirim POST ke sini setelah profil berhasil diverifikasi.
+    Body berisi plist dengan UDID device.
+    """
+    if session_id not in udid_sessions:
+        raise HTTPException(status_code=404, detail="Session tidak ditemukan")
+
+    body = await request.body()
+
+    udid = None
+    try:
+        import plistlib
+        plist = plistlib.loads(body)
+        # iOS mengirim UDID di key 'UDID'
+        udid = plist.get("UDID") or plist.get("udid") or plist.get("DeviceUDID")
+    except Exception:
+        # Fallback: cari pola UDID (40 karakter hex) di body raw
+        import re
+        body_str = body.decode("utf-8", errors="ignore")
+        match = re.search(r'[0-9a-fA-F]{40}', body_str)
+        if match:
+            udid = match.group(0)
+
+    if udid:
+        udid_sessions[session_id]["udid"] = udid.lower()
+
+    # iOS perlu menerima signed profile untuk melanjutkan — kita return profile kosong
+    # Sebenarnya cukup return HTTP 200 dengan plist kosong
+    empty_profile = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict></dict></plist>"""
+
+    return Response(content=empty_profile, media_type="application/x-apple-aspen-config")
+
+
+@app.get("/udid/get/{session_id}")
+def udid_get(session_id: str):
+    """
+    App polling endpoint ini sampai UDID tersedia.
+    Returns: {"udid": "abc123..."|null, "ready": bool}
+    """
+    if session_id not in udid_sessions:
+        raise HTTPException(status_code=404, detail="Session tidak ditemukan")
+
+    session = udid_sessions[session_id]
+
+    # Hapus session lama (>10 menit)
+    age = datetime.utcnow() - session["created_at"]
+    if age > timedelta(minutes=10):
+        del udid_sessions[session_id]
+        raise HTTPException(status_code=410, detail="Session kadaluarsa")
+
+    udid = session.get("udid")
+    return {"udid": udid, "ready": udid is not None}
 
 @app.post("/sign")
 async def sign_ipa(

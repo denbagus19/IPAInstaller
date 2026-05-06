@@ -206,6 +206,127 @@ class SigningAPI {
     }
 }
 
+// MARK: - UDID Auto-Detector
+
+/// Mendeteksi UDID device secara otomatis via Configuration Profile
+/// Teknik yang sama digunakan oleh udid.tech
+class UDIDDetector {
+    static let shared = UDIDDetector()
+    
+    private var pollingTimer: Timer?
+    private var currentSessionId: String?
+    
+    /// Step 1: Mulai session di backend, buka Safari untuk install profil
+    func startDetection(
+        serverURL: String,
+        onStatus: @escaping (String) -> Void,
+        onDetected: @escaping (String) -> Void,
+        onError: @escaping (String) -> Void
+    ) {
+        cancelPolling()
+        
+        let base = serverURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        
+        guard !base.isEmpty, base != "https://your-app.railway.app",
+              let startURL = URL(string: "\(base)/udid/start") else {
+            onError("URL server belum diatur. Buka Pengaturan terlebih dahulu.")
+            return
+        }
+        
+        onStatus("Menghubungi server...")
+        
+        URLSession.shared.dataTask(with: URLRequest(url: startURL)) { data, _, error in
+            guard let data = data, error == nil,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let sessionId = json["session_id"] as? String,
+                  let profileURLStr = json["profile_url"] as? String,
+                  let profileURL = URL(string: profileURLStr)
+            else {
+                DispatchQueue.main.async {
+                    onError("Gagal menghubungi server: \(error?.localizedDescription ?? "Unknown error")")
+                }
+                return
+            }
+            
+            DispatchQueue.main.async {
+                self.currentSessionId = sessionId
+                
+                // Buka profil di Safari — iOS akan minta konfirmasi install
+                UIApplication.shared.open(profileURL)
+                
+                onStatus("⏳ Install profil di Safari, lalu kembali ke app...")
+                
+                // Step 2: Polling backend setiap 2 detik
+                self.startPolling(
+                    serverURL: base,
+                    sessionId: sessionId,
+                    onStatus: onStatus,
+                    onDetected: onDetected,
+                    onError: onError
+                )
+            }
+        }.resume()
+    }
+    
+    /// Step 2: Polling /udid/get/{session_id} sampai UDID tersedia
+    private func startPolling(
+        serverURL: String,
+        sessionId: String,
+        onStatus: @escaping (String) -> Void,
+        onDetected: @escaping (String) -> Void,
+        onError: @escaping (String) -> Void
+    ) {
+        var attempts = 0
+        let maxAttempts = 150 // 5 menit (150 x 2 detik)
+        
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+            attempts += 1
+            
+            guard attempts <= maxAttempts else {
+                timer.invalidate()
+                onError("Timeout: profil tidak berhasil diinstall dalam 5 menit.")
+                return
+            }
+            
+            guard let url = URL(string: "\(serverURL)/udid/get/\(sessionId)") else { return }
+            
+            URLSession.shared.dataTask(with: URLRequest(url: url)) { data, response, error in
+                // Cek session expired (410)
+                if let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 410 {
+                    DispatchQueue.main.async {
+                        timer.invalidate()
+                        onError("Session kadaluarsa. Coba lagi.")
+                    }
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let ready = json["ready"] as? Bool
+                else { return }
+                
+                if ready, let udid = json["udid"] as? String {
+                    DispatchQueue.main.async {
+                        timer.invalidate()
+                        self?.currentSessionId = nil
+                        onDetected(udid)
+                    }
+                }
+            }.resume()
+        }
+    }
+    
+    /// Batalkan polling jika sedang berjalan
+    func cancelPolling() {
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+        currentSessionId = nil
+    }
+}
+
 // MARK: - Errors
 
 enum APIError: LocalizedError {
