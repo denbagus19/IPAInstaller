@@ -15,6 +15,10 @@ struct ContentView: View {
     @State private var isSigning = false
     @State private var statusMessage = "Menunggu file..."
     
+    var allFilesSelected: Bool {
+        selectedIPA != nil && selectedP12 != nil && selectedProvision != nil
+    }
+    
     var body: some View {
         NavigationView {
             Form {
@@ -44,7 +48,10 @@ struct ContentView: View {
                     }
                 }
                 
-                Section(header: Text("Opsi Tambahan (Duplikasi Aplikasi)"), footer: Text("Isi form di bawah jika Anda ingin mengkloning aplikasi. Biarkan kosong untuk menggunakan data asli.")) {
+                Section(
+                    header: Text("Opsi Duplikasi Aplikasi"),
+                    footer: Text("Isi jika ingin menginstall aplikasi yang sama lebih dari sekali. Kosongkan untuk menggunakan data asli.")
+                ) {
                     TextField("Custom Bundle ID (Opsional)", text: $customBundleID)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
@@ -64,29 +71,42 @@ struct ContentView: View {
                                     .progressViewStyle(CircularProgressViewStyle())
                                     .padding(.trailing, 8)
                             }
-                            Text("Sign & Install")
+                            Text(isSigning ? "Memproses..." : "Sign & Install")
                                 .fontWeight(.bold)
                             Spacer()
                         }
                     }
-                    .disabled(selectedIPA == nil || selectedP12 == nil || selectedProvision == nil || isSigning)
-                    .foregroundColor((selectedIPA == nil || selectedP12 == nil || selectedProvision == nil) ? .gray : .blue)
+                    .disabled(!allFilesSelected || isSigning)
+                    .foregroundColor(allFilesSelected && !isSigning ? .blue : .gray)
                 }
                 
                 Section(header: Text("Status")) {
                     Text(statusMessage)
                         .font(.footnote)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .navigationTitle("IPA Installer")
-            .fileImporter(isPresented: $showIPAPicker, allowedContentTypes: [UTType("com.apple.itunes.ipa") ?? .archive], allowsMultipleSelection: false) { result in
+            .fileImporter(
+                isPresented: $showIPAPicker,
+                allowedContentTypes: [UTType("com.apple.itunes.ipa") ?? .archive],
+                allowsMultipleSelection: false
+            ) { result in
                 handleFileSelection(result: result, for: &selectedIPA)
             }
-            .fileImporter(isPresented: $showP12Picker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            .fileImporter(
+                isPresented: $showP12Picker,
+                allowedContentTypes: [.data],
+                allowsMultipleSelection: false
+            ) { result in
                 handleFileSelection(result: result, for: &selectedP12)
             }
-            .fileImporter(isPresented: $showProvisionPicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            .fileImporter(
+                isPresented: $showProvisionPicker,
+                allowedContentTypes: [.data],
+                allowsMultipleSelection: false
+            ) { result in
                 handleFileSelection(result: result, for: &selectedProvision)
             }
         }
@@ -96,12 +116,11 @@ struct ContentView: View {
         do {
             let selectedFiles = try result.get()
             if let fileURL = selectedFiles.first {
-                if fileURL.startAccessingSecurityScopedResource() {
-                    urlState = fileURL
-                }
+                _ = fileURL.startAccessingSecurityScopedResource()
+                urlState = fileURL
             }
         } catch {
-            print("Gagal memilih file: \\(error.localizedDescription)")
+            statusMessage = "Gagal memilih file: \(error.localizedDescription)"
         }
     }
     
@@ -111,13 +130,21 @@ struct ContentView: View {
         isSigning = true
         statusMessage = "Memproses dan Mengekstrak IPA..."
         
-        let optionalCustomBundleID = customBundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : customBundleID
-        let optionalCustomAppName = customAppName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : customAppName
+        let optionalCustomBundleID = customBundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil : customBundleID
+        let optionalCustomAppName = customAppName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil : customAppName
         
-        IPAProcessor.shared.processAndSign(ipaURL: ipa, p12URL: p12, provisionURL: provision, customBundleID: optionalCustomBundleID, customAppName: optionalCustomAppName) { result in
+        IPAProcessor.shared.processAndSign(
+            ipaURL: ipa,
+            p12URL: p12,
+            provisionURL: provision,
+            customBundleID: optionalCustomBundleID,
+            customAppName: optionalCustomAppName
+        ) { result in
             switch result {
             case .success(let (signedIPAURL, bundleID, appName)):
-                self.statusMessage = "Menyiapkan Local Web Server..."
+                self.statusMessage = "Menyiapkan server lokal..."
                 
                 LocalServer.shared.startServer(ipaURL: signedIPAURL, bundleID: bundleID, appName: appName) { installURL in
                     self.isSigning = false
@@ -125,7 +152,7 @@ struct ContentView: View {
                     if installURL.isEmpty {
                         self.statusMessage = "Gagal menjalankan local server."
                     } else {
-                        self.statusMessage = "Siap diinstal! Membuka pop-up..."
+                        self.statusMessage = "Siap diinstall! Membuka dialog..."
                         if let url = URL(string: installURL) {
                             UIApplication.shared.open(url)
                         }
@@ -134,7 +161,7 @@ struct ContentView: View {
                 
             case .failure(let error):
                 self.isSigning = false
-                self.statusMessage = "Error: \\(error.localizedDescription)"
+                self.statusMessage = "Error: \(error.localizedDescription)"
             }
         }
     }

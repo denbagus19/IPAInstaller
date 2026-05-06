@@ -6,7 +6,6 @@ class LocalServer {
     private let server = HttpServer()
     private var isRunning = false
     
-    // Server URL properties
     let port: in_port_t = 8080
     var serverURL: String {
         return "http://127.0.0.1:\(port)"
@@ -15,38 +14,29 @@ class LocalServer {
     func startServer(ipaURL: URL, bundleID: String, appName: String, completion: @escaping (String) -> Void) {
         if isRunning {
             server.stop()
+            isRunning = false
         }
         
         // 1. Serve the IPA file
-        server["/app.ipa"] = { request in
-            do {
-                let data = try Data(contentsOf: ipaURL)
-                return .raw(200, "OK", ["Content-Type": "application/octet-stream"], { writer in
-                    try writer.write(data)
-                })
-            } catch {
-                return .internalServerError
-            }
-        }
+        server["/app.ipa"] = shareFile(ipaURL.path)
         
         // 2. Generate and Serve the Manifest Plist
-        server["/manifest.plist"] = { [weak self] request in
-            guard let self = self else { return .internalServerError }
-            let manifestXML = self.generateManifest(ipaURL: "\(self.serverURL)/app.ipa", bundleID: bundleID, appName: appName)
+        let manifestXML = generateManifest(
+            ipaURL: "\(serverURL)/app.ipa",
+            bundleID: bundleID,
+            appName: appName
+        )
+        server["/manifest.plist"] = { _ in
             let data = manifestXML.data(using: .utf8) ?? Data()
-            return .raw(200, "OK", ["Content-Type": "text/xml"], { writer in
-                try writer.write(data)
-            })
+            return HttpResponse.ok(.data(data, contentType: "text/xml"))
         }
         
         do {
-            try server.start(port)
+            try server.start(port, forceIPv4: true)
             isRunning = true
             
-            // The itms-services URL that triggers the installation
             let manifestURL = "\(serverURL)/manifest.plist"
             let installURL = "itms-services://?action=download-manifest&url=\(manifestURL)"
-            
             completion(installURL)
         } catch {
             print("Server start error: \(error)")
