@@ -34,6 +34,14 @@ class SigningAPI {
         set { UserDefaults.standard.set(newValue, forKey: "server_url") }
     }
     
+    // Dedicated URLSession dengan timeout lebih lama untuk upload IPA besar
+    private lazy var uploadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 300   // 5 menit
+        config.timeoutIntervalForResource = 600  // 10 menit
+        return URLSession(configuration: config)
+    }()
+
     // Upload IPA and start signing job
     func signIPA(
         ipaURL: URL,
@@ -45,7 +53,13 @@ class SigningAPI {
         onProgress: @escaping (String) -> Void,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let apiURL = URL(string: "\(serverURL)/sign") else {
+        // Validasi URL — pastikan mengarah ke FastAPI backend, bukan GraphQL
+        let baseURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        
+        guard !baseURL.isEmpty,
+              baseURL != "https://your-app.railway.app",
+              let apiURL = URL(string: "\(baseURL)/sign") else {
             completion(.failure(APIError.invalidURL))
             return
         }
@@ -54,13 +68,32 @@ class SigningAPI {
         
         var request = URLRequest(url: apiURL)
         request.httpMethod = "POST"
+        // Pastikan tidak ada header Accept yang memicu GraphQL response
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         
-        let boundary = UUID().uuidString
+        let boundary = "Boundary-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         
         var body = Data()
         
-        // IPA file
+        // ✅ PENTING: Text fields HARUS dikirim SEBELUM file
+        // (Sesuai RFC 7578 & standar multipart/form-data)
+        let fields: [(String, String)] = [
+            ("apple_id", appleID),
+            ("password", password),
+            ("udid", udid),
+            ("bundle_id", customBundleID ?? ""),
+            ("app_name", customAppName ?? ""),
+        ]
+        
+        for (key, value) in fields {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+            body.append(value.data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        
+        // File IPA — dikirim SETELAH semua text fields
         do {
             let ipaData = try Data(contentsOf: ipaURL)
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
@@ -73,27 +106,20 @@ class SigningAPI {
             return
         }
         
-        // Form fields
-        let fields: [(String, String)] = [
-            ("apple_id", appleID),
-            ("password", password),
-            ("udid", udid),
-            ("bundle_id", customBundleID ?? ""),
-            ("app_name", customAppName ?? ""),
-        ]
-        
-        for (key, value) in fields {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(value)\r\n".data(using: .utf8)!)
-        }
-        
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        uploadSession.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
+                return
+            }
+            
+            // Cek HTTP status code
+            if let httpResponse = response as? HTTPURLResponse,
+               httpResponse.statusCode >= 400 {
+                let raw = data.flatMap { String(data: $0, encoding: .utf8) } ?? "No response body"
+                completion(.failure(APIError.decodingError("HTTP \(httpResponse.statusCode): \(raw)")))
                 return
             }
             
