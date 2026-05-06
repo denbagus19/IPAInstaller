@@ -15,38 +15,45 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          brew install xcodegen ldid
+      - name: Install xcodegen and ldid
+        run: brew install xcodegen ldid
 
-      - name: Generate Xcode Project
+      - name: Resolve Swift Packages
+        working-directory: ./IPAInstaller
+        run: xcodegen generate
+
+      - name: Build (No Code Signing)
         working-directory: ./IPAInstaller
         run: |
-          xcodegen generate
-
-      - name: Build Xcode Project (Unsigned)
-        working-directory: ./IPAInstaller
-        run: |
-          xcodebuild clean build \
+          xcodebuild \
             -project IPAInstaller.xcodeproj \
             -scheme IPAInstaller \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Fake-sign with ldid
+        working-directory: ./IPAInstaller
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/IPAInstaller.app"
+          ldid -S "$APP_PATH/IPAInstaller"
 
       - name: Package into IPA
         working-directory: ./IPAInstaller
         run: |
-          mkdir Payload
+          mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/IPAInstaller.app Payload/
-          ldid -S Payload/IPAInstaller.app
           zip -qr IPAInstaller.ipa Payload
+          echo "IPA size: $(du -sh IPAInstaller.ipa | cut -f1)"
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: IPAInstaller-Unsigned
           path: IPAInstaller/IPAInstaller.ipa
+          retention-days: 30
