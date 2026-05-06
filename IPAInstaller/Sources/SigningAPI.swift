@@ -34,6 +34,31 @@ class SigningAPI {
         set { UserDefaults.standard.set(newValue, forKey: "server_url") }
     }
     
+    /// Fungsi pembantu untuk memvalidasi dan membersihkan URL
+    func getValidatedURL(path: String) throws -> URL {
+        var base = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        
+        if base.isEmpty {
+            throw APIError.invalidURL("URL server masih kosong.")
+        }
+        
+        if base == "https://your-app.railway.app" {
+            throw APIError.invalidURL("URL server belum diatur. Silakan ke Pengaturan.")
+        }
+        
+        // Tambahkan https:// jika tidak ada scheme
+        if !base.lowercased().hasPrefix("http://") && !base.lowercased().hasPrefix("https://") {
+            base = "https://\(base)"
+        }
+        
+        guard let url = URL(string: "\(base)\(path)") else {
+            throw APIError.invalidURL("Format URL tidak valid.")
+        }
+        
+        return url
+    }
+    
     // Dedicated URLSession dengan timeout lebih lama untuk upload IPA besar
     private lazy var uploadSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -53,14 +78,11 @@ class SigningAPI {
         onProgress: @escaping (String) -> Void,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        // Validasi URL — pastikan mengarah ke FastAPI backend, bukan GraphQL
-        let baseURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        
-        guard !baseURL.isEmpty,
-              baseURL != "https://your-app.railway.app",
-              let apiURL = URL(string: "\(baseURL)/sign") else {
-            completion(.failure(APIError.invalidURL))
+        let apiURL: URL
+        do {
+            apiURL = try getValidatedURL(path: "/sign")
+        } catch {
+            completion(.failure(error))
             return
         }
         
@@ -147,8 +169,11 @@ class SigningAPI {
         onProgress: @escaping (String) -> Void,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let statusURL = URL(string: "\(serverURL)/status/\(jobId)") else {
-            completion(.failure(APIError.invalidURL))
+        let statusURL: URL
+        do {
+            statusURL = try getValidatedURL(path: "/status/\(jobId)")
+        } catch {
+            completion(.failure(error))
             return
         }
         
@@ -225,15 +250,17 @@ class UDIDDetector {
     ) {
         cancelPolling()
         
-        let base = serverURL
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        
-        guard !base.isEmpty, base != "https://your-app.railway.app",
-              let startURL = URL(string: "\(base)/udid/start") else {
-            onError("URL server belum diatur. Buka Pengaturan terlebih dahulu.")
+        let startURL: URL
+        do {
+            // Gunakan Shared API helper untuk konsistensi
+            startURL = try SigningAPI.shared.getValidatedURL(path: "/udid/start")
+        } catch {
+            onError(error.localizedDescription)
             return
         }
+        
+        // Ambil base URL yang sudah dibersihkan untuk polling nanti
+        let base = startURL.absoluteString.replacingOccurrences(of: "/udid/start", with: "")
         
         onStatus("Menghubungi server...")
         
@@ -330,7 +357,7 @@ class UDIDDetector {
 // MARK: - Errors
 
 enum APIError: LocalizedError {
-    case invalidURL
+    case invalidURL(String)
     case noData
     case decodingError(String)
     case noInstallURL
@@ -339,7 +366,7 @@ enum APIError: LocalizedError {
     
     var errorDescription: String? {
         switch self {
-        case .invalidURL:         return "URL server tidak valid."
+        case .invalidURL(let reason): return reason
         case .noData:             return "Tidak ada respons dari server."
         case .decodingError(let m): return "Parsing error: \(m)"
         case .noInstallURL:       return "Server tidak mengembalikan URL instalasi."
