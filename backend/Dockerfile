@@ -3,13 +3,13 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# ── System deps ──────────────────────────────────────────────────────────────
+# ── System deps ────────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
     python3 python3-pip curl wget git pkg-config \
-    libssl-dev libz-dev cmake build-essential \
+    libssl-dev cmake build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Install zsign ─────────────────────────────────────────────────────────────
+# ── Install zsign (fast IPA signer) ──────────────────────────────────────────
 RUN git clone --depth=1 https://github.com/zhlynn/zsign.git /tmp/zsign \
     && cd /tmp/zsign/build/linux \
     && make clean && make \
@@ -17,24 +17,14 @@ RUN git clone --depth=1 https://github.com/zhlynn/zsign.git /tmp/zsign \
     && chmod +x /usr/local/bin/zsign \
     && rm -rf /tmp/zsign
 
-# ── Install anisette-v3 server ────────────────────────────────────────────────
-RUN wget -q \
-    https://github.com/Dadoum/Provision/releases/latest/download/anisette-server-x86_64 \
-    -O /usr/local/bin/anisette-v3-server \
-    && chmod +x /usr/local/bin/anisette-v3-server
-
-# ── Python dependencies ───────────────────────────────────────────────────────
+# ── Python dependencies ────────────────────────────────────────────────────────
 WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# ── Copy app code ─────────────────────────────────────────────────────────────
+# ── Copy app code ──────────────────────────────────────────────────────────────
 COPY backend/ .
-
-# ── Startup script ────────────────────────────────────────────────────────────
-COPY backend/start.sh /start.sh
-RUN chmod +x /start.sh
 
 EXPOSE 8000
 
-CMD ["/start.sh"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
