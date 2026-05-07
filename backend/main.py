@@ -62,7 +62,7 @@ def generate_private_key() -> tuple[str, str]:
     ).decode()
     return private_pem
 
-async def do_signing_job(
+def do_signing_job(
     job_id: str,
     ipa_path: str,
     apple_id: str,
